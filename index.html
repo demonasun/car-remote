@@ -1,0 +1,161 @@
+<!DOCTYPE html>
+<html lang="zh">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1,user-scalable=no">
+<title>ESP32 小车 · MQTT</title>
+<style>
+*{box-sizing:border-box;-webkit-tap-highlight-color:transparent;
+  -webkit-user-select:none;-moz-user-select:none;-ms-user-select:none;user-select:none;
+  -webkit-touch-callout:none}
+body{margin:0;background:#0d0d0f;color:#eee;min-height:100vh;display:flex;flex-direction:column;
+align-items:center;justify-content:center;font-family:-apple-system,"PingFang SC","Microsoft YaHei",sans-serif;
+user-select:none;padding:20px;-webkit-touch-callout:none;overscroll-behavior:none}
+.head{display:flex;align-items:center;gap:8px;margin-bottom:6px}
+.dot{width:9px;height:9px;border-radius:50%;background:#444;transition:background .2s}
+.dot.on{background:#30d158;box-shadow:0 0 10px #30d158}
+h1{font-size:17px;font-weight:500;color:#888;margin:0;letter-spacing:1px}
+.status{font-size:13px;color:#666;margin-bottom:26px;height:18px}
+.pad{display:grid;grid-template-columns:repeat(3,84px);grid-template-rows:repeat(3,84px);gap:10px}
+button{border:none;border-radius:18px;background:#1e1e22;color:#eee;font-size:30px;
+touch-action:none;transition:background .08s,transform .08s;cursor:pointer;
+-webkit-user-select:none;user-select:none;-webkit-touch-callout:none;
+-webkit-appearance:none;appearance:none}
+button.on{background:#0a84ff;transform:scale(.94)}
+.dial{display:flex;align-items:center;justify-content:center;border-radius:50%;
+background:#141416;color:#4a9eff;font-size:20px;font-weight:600;
+font-variant-numeric:tabular-nums;border:1px solid #26262b;
+-webkit-user-select:none;user-select:none}
+input[type=range]{width:270px;margin-top:26px;accent-color:#0a84ff;height:26px}
+.info{margin-top:12px;font-size:14px;color:#666;font-variant-numeric:tabular-nums}
+.hint{margin-top:28px;font-size:12px;color:#3a3a3a}
+</style>
+</head>
+<body>
+<div class="head"><span class="dot" id="dot"></span><h1>ESP32 小车</h1></div>
+<div class="status" id="status">连接中…</div>
+
+<div class="pad">
+  <span></span><button data-c="w">&#9650;</button><span></span>
+  <button data-c="a">&#9664;</button><div class="dial" id="dial">120</div><button data-c="d">&#9654;</button>
+  <span></span><button data-c="s">&#9660;</button><span></span>
+</div>
+
+<input type="range" id="sp" min="60" max="255" value="120">
+<div class="hint">按住方向键行驶，松手即停</div>
+
+<script src="mqtt.min.js"></script>
+<script>
+// 移动端防长按选中 / 弹菜单
+document.addEventListener('selectstart', (e) => e.preventDefault());
+document.addEventListener('contextmenu', (e) => e.preventDefault());
+document.addEventListener('dragstart', (e) => e.preventDefault());
+document.addEventListener('touchmove', (e) => {
+  if (e.target.closest('button')) e.preventDefault();
+}, { passive: false });
+
+const dot = document.getElementById('dot');
+const statusEl = document.getElementById('status');
+const dial = document.getElementById('dial');
+const sp = document.getElementById('sp');
+
+let client = null;
+let timer = null;
+let cur = null;
+let publishSpeed = null;
+
+// ================= 连接配置 =================
+const MQTT_URL     = 'wss://ma40e674.ala.cn-hangzhou.emqxsl.cn:8084/mqtt';
+const MQTT_USER    = 'asun';
+const MQTT_PASS    = '12346678';
+const TOPIC_PREFIX = 'car-ma40e674';
+
+function connect() {
+  client = mqtt.connect(MQTT_URL, {
+    username: MQTT_USER,
+    password: MQTT_PASS,
+    clientId: 'web-' + Math.random().toString(16).slice(2, 8),
+    reconnectPeriod: 2000,
+    connectTimeout: 8000,
+    keepalive: 30,
+  });
+
+  client.on('connect', () => {
+    dot.classList.add('on');
+    statusEl.textContent = '已连接，等待小车上报';
+    client.subscribe(TOPIC_PREFIX + '/status');
+    client.subscribe(TOPIC_PREFIX + '/online');
+    client.publish(TOPIC_PREFIX + '/online', 'web-ready');
+  });
+
+  client.on('close', () => {
+    dot.classList.remove('on');
+    statusEl.textContent = '已断开，重连中…';
+    stopHold();
+  });
+
+  client.on('error', (e) => {
+    statusEl.textContent = '连接失败：' + e.message;
+  });
+
+  client.on('message', (t, p) => {
+    const s = p.toString();
+    if (t === TOPIC_PREFIX + '/online') {
+      if (s === 'offline') statusEl.textContent = '小车离线';
+      else statusEl.textContent = '小车在线';
+      return;
+    }
+    if (t === TOPIC_PREFIX + '/status') {
+      try {
+        const j = JSON.parse(s);
+        const names = { fwd: '前进', back: '后退', left: '左转', right: '右转', stop: '停止' };
+        statusEl.textContent = names[j.motion] || j.motion;
+        dial.textContent = j.speed;
+        sp.value = j.speed;
+      } catch (e) { /* ignore */ }
+    }
+  });
+}
+
+function sendCmd(c) {
+  if (client && client.connected) client.publish(TOPIC_PREFIX + '/cmd', c);
+}
+
+function sendSpeed(v) {
+  if (client && client.connected) client.publish(TOPIC_PREFIX + '/speed', String(v));
+}
+
+function hold(c, btn) {
+  stopHold();
+  cur = c;
+  sendCmd(c);
+  btn.classList.add('on');
+  timer = setInterval(() => sendCmd(c), 120);
+}
+
+function stopHold() {
+  if (timer) { clearInterval(timer); timer = null; }
+  document.querySelectorAll('button').forEach(b => b.classList.remove('on'));
+  if (cur && cur !== 'x') sendCmd('x');
+  cur = null;
+}
+
+document.querySelectorAll('button').forEach(btn => {
+  const c = btn.dataset.c;
+  btn.addEventListener('pointerdown', e => { e.preventDefault(); hold(c, btn); });
+  btn.addEventListener('pointerup', e => { e.preventDefault(); stopHold(); });
+  btn.addEventListener('pointerleave', () => stopHold());
+  btn.addEventListener('pointercancel', () => stopHold());
+  btn.addEventListener('contextmenu', e => e.preventDefault());
+});
+
+sp.addEventListener('input', () => {
+  dial.textContent = sp.value;
+  if (publishSpeed) clearTimeout(publishSpeed);
+  publishSpeed = setTimeout(() => sendSpeed(sp.value), 150);
+});
+
+connect();
+</script>
+</body>
+</html>
