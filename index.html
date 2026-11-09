@@ -2,33 +2,83 @@
 <html lang="zh">
 <head>
 <meta charset="utf-8">
-<meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1,user-scalable=no">
+<meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1,user-scalable=no,viewport-fit=cover">
 <title>ESP32 小车 · MQTT</title>
 <style>
 *{box-sizing:border-box;-webkit-tap-highlight-color:transparent;
   -webkit-user-select:none;-moz-user-select:none;-ms-user-select:none;user-select:none;
   -webkit-touch-callout:none}
-body{margin:0;background:#0d0d0f;color:#eee;min-height:100vh;display:flex;flex-direction:column;
-align-items:center;justify-content:center;font-family:-apple-system,"PingFang SC","Microsoft YaHei",sans-serif;
-user-select:none;padding:20px;-webkit-touch-callout:none;overscroll-behavior:none}
-.head{display:flex;align-items:center;gap:8px;margin-bottom:6px}
-.dot{width:9px;height:9px;border-radius:50%;background:#444;transition:background .2s}
+
+:root{ --btn: 84px; }
+
+html,body{height:100%}
+body{
+  margin:0; padding:8px;
+  height:100vh; height:100dvh;
+  overflow:hidden;
+  background:rgba(10,10,12,.86);
+  color:#eee;
+  display:flex; flex-direction:column;
+  align-items:center; justify-content:center;
+  font-family:-apple-system,"PingFang SC","Microsoft YaHei",sans-serif;
+  -webkit-touch-callout:none; overscroll-behavior:none;
+}
+
+.head{display:flex;align-items:center;gap:8px;margin-bottom:4px}
+.dot{width:9px;height:9px;border-radius:50%;background:#444;transition:background .2s;flex:none}
 .dot.on{background:#30d158;box-shadow:0 0 10px #30d158}
-h1{font-size:17px;font-weight:500;color:#888;margin:0;letter-spacing:1px}
-.status{font-size:13px;color:#666;margin-bottom:26px;height:18px}
-.pad{display:grid;grid-template-columns:repeat(3,84px);grid-template-rows:repeat(3,84px);gap:10px}
-button{border:none;border-radius:18px;background:#1e1e22;color:#eee;font-size:30px;
-touch-action:none;transition:background .08s,transform .08s;cursor:pointer;
--webkit-user-select:none;user-select:none;-webkit-touch-callout:none;
--webkit-appearance:none;appearance:none}
-button.on{background:#0a84ff;transform:scale(.94)}
-.dial{display:flex;align-items:center;justify-content:center;border-radius:50%;
-background:#141416;color:#4a9eff;font-size:20px;font-weight:600;
-font-variant-numeric:tabular-nums;border:1px solid #26262b;
--webkit-user-select:none;user-select:none}
-input[type=range]{width:270px;margin-top:26px;accent-color:#0a84ff;height:26px}
-.info{margin-top:12px;font-size:14px;color:#666;font-variant-numeric:tabular-nums}
-.hint{margin-top:28px;font-size:12px;color:#3a3a3a}
+h1{font-size:15px;font-weight:500;color:#999;margin:0;letter-spacing:1px}
+
+.status{font-size:12px;color:#777;margin-bottom:12px;height:16px;text-align:center}
+
+.pad{
+  display:grid;
+  grid-template-columns:repeat(3, var(--btn));
+  grid-template-rows:repeat(3, var(--btn));
+  gap:8px;
+  flex:none;
+}
+
+button{
+  border:none; border-radius:var(--radius, 16px);
+  background:rgba(35,35,39,.82);
+  color:#eee; font-size:calc(var(--btn) * .34);
+  touch-action:none; cursor:pointer;
+  transition:background .08s,transform .08s;
+  -webkit-user-select:none; user-select:none; -webkit-touch-callout:none;
+  -webkit-appearance:none; appearance:none;
+  padding:0;
+}
+button.on{background:rgba(10,132,255,.9);transform:scale(.94)}
+
+.dial{
+  display:flex;align-items:center;justify-content:center;
+  border-radius:50%;
+  background:rgba(20,20,22,.8);
+  color:#4a9eff;
+  font-size:calc(var(--btn) * .26);
+  font-weight:600;
+  font-variant-numeric:tabular-nums;
+  border:1px solid rgba(60,60,66,.7);
+  -webkit-user-select:none; user-select:none;
+}
+
+input[type=range]{
+  width:calc(var(--btn) * 3);
+  margin-top:14px;
+  accent-color:#0a84ff;
+  height:26px;
+  flex:none;
+}
+
+.hint{margin-top:10px;font-size:11px;color:#555;text-align:center}
+
+/* 紧凑模式：浮层/小窗里用，去掉一切非必要元素 */
+.compact .head,
+.compact .status,
+.compact .hint{ display:none; }
+.compact body{padding:6px}
+.compact input[type=range]{margin-top:8px;height:20px}
 </style>
 </head>
 <body>
@@ -59,17 +109,47 @@ const statusEl = document.getElementById('status');
 const dial = document.getElementById('dial');
 const sp = document.getElementById('sp');
 
-let client = null;
-let timer = null;
-let cur = null;
-let publishSpeed = null;
-
 // ================= 连接配置 =================
 const MQTT_URL     = 'wss://ma40e674.ala.cn-hangzhou.emqxsl.cn:8084/mqtt';
 const MQTT_USER    = 'asun';
 const MQTT_PASS    = '12346678';
 const TOPIC_PREFIX = 'car-ma40e674';
 
+let client = null;
+let timer = null;
+let cur = null;
+let publishSpeed = null;
+
+// ================= 自适应尺寸 =================
+// 根据窗口高度动态算按钮大小，保证 3 行方向键 + 滑块完整放进窗口
+function fitLayout() {
+  const h = window.innerHeight;
+  const w = window.innerWidth;
+
+  // 窗口矮于 820px 就进紧凑模式（隐藏标题/状态/提示）
+  const compact = h < 820;
+  document.body.classList.toggle('compact', compact);
+
+  // 需要预留的空间：紧凑模式只留滑块 + 内边距
+  const reserve = compact ? 62 : 210;
+  const availH = Math.max(180, h - reserve);
+  const availW = w - 16;
+
+  const byHeight = availH / 3 - 6;      // 3 行 + 2 个 gap
+  const byWidth  = availW / 3 - 6;
+
+  let btn = Math.min(byHeight, byWidth, 110);
+  btn = Math.max(btn, 44);              // 不小于 44px，保证能按准
+
+  document.documentElement.style.setProperty('--btn', btn + 'px');
+  document.documentElement.style.setProperty('--radius', Math.round(btn * 0.19) + 'px');
+}
+
+window.addEventListener('resize', fitLayout);
+window.addEventListener('orientationchange', () => setTimeout(fitLayout, 120));
+fitLayout();
+
+// ================= MQTT =================
 function connect() {
   client = mqtt.connect(MQTT_URL, {
     username: MQTT_USER,
